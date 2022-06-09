@@ -32,12 +32,11 @@
 # - Trap errors properly.  Some stuff just falls through right now.
 # - Add docstrings throughout!
 
-from serial import Serial
 import time
 import sys
 import math
 
-class Adafruit_Thermal(Serial):
+class Adafruit_Thermal():
 
 	resumeTime      =   0.0
 	byteTime        =   0.0
@@ -54,89 +53,46 @@ class Adafruit_Thermal(Serial):
 	firmwareVersion =   268
 	writeToStdout   = False
 
+	fileLocation = "/dev/usb/lp0"
+
 	def __init__(self, *args, **kwargs):
 		# NEW BEHAVIOR: if no parameters given, output is written
 		# to stdout, to be piped through 'lp -o raw' (old behavior
 		# was to use default port & baud rate).
-		baudrate = 19200
-		if len(args) == 0:
-			self.writeToStdout = True
+		baudrate = 9600
 		if len(args) == 1:
-			# If only port is passed, use default baud rate.
-			args = [ args[0], baudrate ]
-		elif len(args) == 2:
-			# If both passed, use those values.
-			baudrate = args[1]
+			self.fileLocation = args[0]
 
-		# Firmware is assumed version 2.68.  Can override this
-		# with the 'firmware=X' argument, where X is the major
-		# version number * 100 + the minor version number (e.g.
-		# pass "firmware=264" for version 2.64.
-		self.firmwareVersion = kwargs.get('firmware', 268)
+		self.byteTime = 11.0 / float(baudrate)
 
-		if self.writeToStdout is False:
-			# Calculate time to issue one byte to the printer.
-			# 11 bits (not 8) to accommodate idle, start and
-			# stop bits.  Idle time might be unnecessary, but
-			# erring on side of caution here.
-			self.byteTime = 11.0 / float(baudrate)
 
-			Serial.__init__(self, *args, **kwargs)
+		# The printer can't start receiving data immediately
+		# upon power up -- it needs a moment to cold boot
+		# and initialize.  Allow at least 1/2 sec of uptime
+		# before printer can receive data.
+		self.timeoutSet(0.5)
 
-			# Remainder of this method was previously in begin()
+		self.wake()
+		self.reset()
 
-			# The printer can't start receiving data immediately
-			# upon power up -- it needs a moment to cold boot
-			# and initialize.  Allow at least 1/2 sec of uptime
-			# before printer can receive data.
-			self.timeoutSet(0.5)
+		# Description of print density from p. 23 of manual:
+		# DC2 # n Set printing density
+		# Decimal: 18 35 n
+		# D4..D0 of n is used to set the printing density.
+		# Density is 50% + 5% * n(D4-D0) printing density.
+		# D7..D5 of n is used to set the printing break time.
+		# Break time is n(D7-D5)*250us.
+		# (Unsure of default values -- not documented)
 
-			self.wake()
-			self.reset()
+		printDensity   = 10 # 100%
+		printBreakTime =  2 # 500 uS
 
-			# Description of print settings from p. 23 of manual:
-			# ESC 7 n1 n2 n3 Setting Control Parameter Command
-			# Decimal: 27 55 n1 n2 n3
-			# max heating dots, heating time, heating interval
-			# n1 = 0-255 Max heat dots, Unit (8dots), Default: 7 (64 dots)
-			# n2 = 3-255 Heating time, Unit (10us), Default: 80 (800us)
-			# n3 = 0-255 Heating interval, Unit (10us), Default: 2 (20us)
-			# The more max heating dots, the more peak current
-			# will cost when printing, the faster printing speed.
-			# The max heating dots is 8*(n1+1).  The more heating
-			# time, the more density, but the slower printing
-			# speed.  If heating time is too short, blank page
-			# may occur.  The more heating interval, the more
-			# clear, but the slower printing speed.
-
-			heatTime = kwargs.get('heattime', self.defaultHeatTime)
-			self.writeBytes(
-			  27,       # Esc
-			  55,       # 7 (print settings)
-			  11,       # Heat dots
-			  heatTime, # Lib default
-			  40)       # Heat interval
-
-			# Description of print density from p. 23 of manual:
-			# DC2 # n Set printing density
-			# Decimal: 18 35 n
-			# D4..D0 of n is used to set the printing density.
-			# Density is 50% + 5% * n(D4-D0) printing density.
-			# D7..D5 of n is used to set the printing break time.
-			# Break time is n(D7-D5)*250us.
-			# (Unsure of default values -- not documented)
-
-			printDensity   = 10 # 100%
-			printBreakTime =  2 # 500 uS
-
-			self.writeBytes(
-			  18, # DC2
-			  35, # Print density
-			  (printBreakTime << 5) | printDensity)
-			self.dotPrintTime = 0.03
-			self.dotFeedTime  = 0.0021
-		else:
-			self.reset() # Inits some vars
+		self.writeBytes(
+		  18, # DC2
+		  35, # Print density
+		  (printBreakTime << 5) | printDensity)
+		self.dotPrintTime = 0.03
+		self.dotFeedTime  = 0.0021
 
 	# Because there's no flow control between the printer and computer,
 	# special care must be taken to avoid overrunning the printer's
@@ -178,59 +134,43 @@ class Adafruit_Thermal(Serial):
 
 	# 'Raw' byte-writing method
 	def writeBytes(self, *args):
-		if self.writeToStdout:
-			for arg in args:
-				sys.stdout.write(bytes([arg]))
-		else:
+		with open(self.fileLocation, 'wb') as p:
 			for arg in args:
 				self.timeoutWait()
 				self.timeoutSet(len(args) * self.byteTime)
-				super(Adafruit_Thermal, self).write(bytes([arg]))
+				p.write(bytes(arg))
 
 	# Override write() method to keep track of paper feed.
 	def write(self, *data):
-		for i in range(len(data)):
-			c = data[i]
-			if self.writeToStdout:
-				sys.stdout.write(c)
-				continue
-			if c != 0x13:
-				self.timeoutWait()
-				super(Adafruit_Thermal, self).write(c)
-				d = self.byteTime
-				if ((c == '\n') or
-				    (self.column == self.maxColumn)):
-					# Newline or wrap
-					if self.prevByte == '\n':
-						# Feed line (blank)
-						d += ((self.charHeight +
-						       self.lineSpacing) *
-						      self.dotFeedTime)
+		with open(self.fileLocation, 'w') as p:
+			for i in range(len(data)):
+				c = data[i]
+				if c != 0x13:
+					self.timeoutWait()
+					p.write(c)
+					d = self.byteTime
+					if ((c == '\n') or
+						(self.column == self.maxColumn)):
+						# Newline or wrap
+						if self.prevByte == '\n':
+							# Feed line (blank)
+							d += ((self.charHeight +
+								   self.lineSpacing) *
+								  self.dotFeedTime)
+						else:
+							# Text line
+							d += ((self.charHeight *
+								   self.dotPrintTime) +
+								  (self.lineSpacing *
+								   self.dotFeedTime))
+							self.column = 0
+							# Treat wrap as newline
+							# on next pass
+							c = '\n'
 					else:
-						# Text line
-						d += ((self.charHeight *
-						       self.dotPrintTime) +
-						      (self.lineSpacing *
-						       self.dotFeedTime))
-						self.column = 0
-						# Treat wrap as newline
-						# on next pass
-						c = '\n'
-				else:
-					self.column += 1
-				self.timeoutSet(d)
-				self.prevByte = c
-
-	# The bulk of this method was moved into __init__,
-	# but this is left here for compatibility with older
-	# code that might get ported directly from Arduino.
-	def begin(self, heatTime=defaultHeatTime):
-		self.writeBytes(
-		  27,       # Esc
-		  55,       # 7 (print settings)
-		  11,       # Heat dots
-		  heatTime,
-		  40)       # Heat interval
+						self.column += 1
+					self.timeoutSet(d)
+					self.prevByte = c
 
 	def reset(self):
 		self.writeBytes(27, 64) # Esc @ = init command
@@ -322,10 +262,7 @@ class Adafruit_Thermal(Serial):
 			self.CODABAR : -1
 		}
 
-		if self.firmwareVersion >= 264:
-			n = newDict[type]
-		else:
-			n = oldDict[type]
+		n = newDict[type]
 		if n == -1: return
 		self.feed(1) # Recent firmware requires this?
 		self.writeBytes(
@@ -466,7 +403,7 @@ class Adafruit_Thermal(Serial):
 	# Feeds by the specified number of individual pixel rows
 	def feedRows(self, rows):
 		self.writeBytes(27, 74, rows)
-		self.timeoutSet(rows * dotFeedTime)
+		self.timeoutSet(rows * self.dotFeedTime)
 		self.prevByte = '\n'
 		self.column = 0
 
