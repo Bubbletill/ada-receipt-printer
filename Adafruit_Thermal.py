@@ -135,18 +135,18 @@ class Adafruit_Thermal():
 	# 'Raw' byte-writing method
 	def writeBytes(self, *args):
 		with open(self.fileLocation, 'wb') as p:
-			for arg in args:
-				self.timeoutWait()
-				self.timeoutSet(len(args) * self.byteTime)
-				p.write(bytes(arg))
+			#for arg in args:
+				#self.timeoutWait()
+				#self.timeoutSet(len(args) * self.byteTime)
+			p.write(bytes(args))
 
 	# Override write() method to keep track of paper feed.
 	def write(self, *data):
-		with open(self.fileLocation, 'w') as p:
+		with open(self.fileLocation, 'wb') as p:
 			for i in range(len(data)):
 				c = data[i]
 				if c != 0x13:
-					self.timeoutWait()
+					#self.timeoutWait()
 					p.write(c)
 					d = self.byteTime
 					if ((c == '\n') or
@@ -281,16 +281,15 @@ class Adafruit_Thermal():
 				for i in range(n):
 					sys.stdout.write(text[i].encode('utf-8', 'ignore'))
 			else:
-				super(Adafruit_Thermal, self).write((chr(n)).encode('utf-8', 'ignore'))
+				self.write((chr(n)).encode('utf-8', 'ignore'))
 				for i in range(n):
-					super(Adafruit_Thermal,
-					  self).write(text[i].encode('utf-8', 'ignore'))
+					self.write(text[i].encode('utf-8', 'ignore'))
 		else:
 			# Older firmware: write string + NUL
 			if self.writeToStdout:
 				sys.stdout.write(text.encode('utf-8', 'ignore'))
 			else:
-				super(Adafruit_Thermal, self).write(text.encode('utf-8', 'ignore'))
+				self.write(text.encode('utf-8', 'ignore'))
 		self.prevByte = '\n'
 
 	# === Character commands ===
@@ -469,8 +468,7 @@ class Adafruit_Thermal():
 					if self.writeToStdout:
 						sys.stdout.write(bytes([bitmap[i]]))
 					else:
-						super(Adafruit_Thermal,
-						  self).write(bytes([bitmap[i]]))
+						self.write(bytes([bitmap[i]]))
 					i += 1
 				i += rowBytes - rowBytesClipped
 			self.timeoutSet(chunkHeight * self.dotPrintTime)
